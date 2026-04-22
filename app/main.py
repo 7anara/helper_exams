@@ -16,15 +16,15 @@ import pytz
 # ─────────────────────────────────────────
 # ЖӨНДӨМӨЛӨР — ушуларды өзгөрт
 # ─────────────────────────────────────────
-TELEGRAM_TOKEN = "8432060922:AAFpdpoGqmlCt-kmaw_rvgoLELy7RQbHLzQ"
-DIFY_API_KEY   = "app-HELigDeYtAHAl13XadJTmbAx"
-DIFY_API_URL   = "https://api.dify.ai/v1/chat-messages"
+TELEGRAM_TOKEN = "СЕНИН_TELEGRAM_TOKENИҢ"
+DIFY_API_KEY = "СЕНИН_DIFY_API_KEYИҢ"
+DIFY_API_URL = "https://api.dify.ai/v1/chat-messages"
 
-TIMEZONE         = pytz.timezone("Asia/Bishkek")
-TEST_DAYS        = {2: "Шейшемби", 4: "Бейшемби", 7: "Жекшемби"}
-REMINDER_HOUR    = 9
-REMINDER_MINUTE  = 0
-WEEKLY_STAT_DAY  = 7
+TIMEZONE = pytz.timezone("Asia/Bishkek")
+TEST_DAYS = {2: "Шейшемби", 4: "Бейшемби", 7: "Жекшемби"}
+REMINDER_HOUR = 9
+REMINDER_MINUTE = 0
+WEEKLY_STAT_DAY = 7
 WEEKLY_STAT_HOUR = 20
 QUESTIONS_PER_TEST = 15
 
@@ -66,20 +66,20 @@ registered_users: set = set()
 # ТЕМАЛАР
 # ─────────────────────────────────────────
 TOPICS = {
-    "python":     "Python",
+    "python": "Python",
     "postgresql": "PostgreSQL",
-    "oop":        "OOP",
-    "fastapi":    "FastAPI",
-    "django":     "Django REST",
-    "streamlit":  "Streamlit",
-    "pytorch":    "PyTorch",
-    "docker":     "Docker",
-    "aws":        "AWS",
-    "ml":         "Machine Learning",
-    "dl":         "Deep Learning",
-    "pandas":     "Pandas",
-    "numpy":      "NumPy",
-    "seaborn":    "Seaborn",
+    "oop": "OOP",
+    "fastapi": "FastAPI",
+    "django": "Django REST",
+    "streamlit": "Streamlit",
+    "pytorch": "PyTorch",
+    "docker": "Docker",
+    "aws": "AWS",
+    "ml": "Machine Learning",
+    "dl": "Deep Learning",
+    "pandas": "Pandas",
+    "numpy": "NumPy",
+    "seaborn": "Seaborn",
     "matplotlib": "Matplotlib",
 }
 
@@ -98,39 +98,59 @@ markdown блок да колдонба, жалан таза JSON:
 "correct" — туура жооптун индекси (0,1,2 же 3).
 """
 
-def ask_dify_json(uid: int, prompt: str) -> dict | None:
-    """Dify'ден JSON суроо алат. Ката болсо None кайтарат."""
-    conv_id = user_data[uid]["conversation_id"]
-    payload = {
-        "inputs": {},
-        "query": prompt + DIFY_SYSTEM_SUFFIX,
-        "response_mode": "blocking",
-        "conversation_id": conv_id,
-        "user": str(uid),
-    }
+
+def ask_dify_json(uid: int, prompt: str, conv_id: str = "") -> dict | None:
+    """Dify'ден JSON суроо алат. 3 жолу кайра баштайт."""
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
         "Content-Type": "application/json",
     }
-    try:
-        res = requests.post(DIFY_API_URL, json=payload, headers=headers, timeout=30)
-        data = res.json()
-        new_conv = data.get("conversation_id", "")
-        if new_conv:
-            user_data[uid]["conversation_id"] = new_conv
 
-        raw = data.get("answer", "")
-        # JSON блогун тазала
-        raw = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
-        parsed = json.loads(raw)
-        # Валидация
-        assert "question" in parsed
-        assert isinstance(parsed["options"], list) and len(parsed["options"]) == 4
-        assert isinstance(parsed["correct"], int) and 0 <= parsed["correct"] <= 3
-        return parsed
-    except Exception as e:
-        logger.error(f"ask_dify_json error: {e}")
-        return None
+    for attempt in range(3):
+        try:
+            payload = {
+                "inputs": {},
+                "query": prompt + DIFY_SYSTEM_SUFFIX,
+                "response_mode": "blocking",
+                "conversation_id": conv_id,
+                "user": str(uid),
+            }
+            res = requests.post(DIFY_API_URL, json=payload, headers=headers, timeout=30)
+
+            if res.status_code == 429:
+                # Rate limit — 3 секунд күт
+                import time
+                time.sleep(3)
+                continue
+
+            data = res.json()
+            new_conv = data.get("conversation_id", "")
+            if new_conv:
+                conv_id = new_conv
+
+            raw = data.get("answer", "")
+            # JSON блогун тазала
+            raw = re.sub(r"```(?:json)?", "", raw).strip().strip("`").strip()
+            # Кээде жооптун алдында текст болот — JSON'ду гана алабыз
+            match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if match:
+                raw = match.group(0)
+
+            parsed = json.loads(raw)
+            # Валидация
+            assert "question" in parsed
+            assert isinstance(parsed["options"], list) and len(parsed["options"]) == 4
+            assert isinstance(parsed["correct"], int) and 0 <= parsed["correct"] <= 3
+            parsed["_conv_id"] = conv_id
+            return parsed
+
+        except Exception as e:
+            logger.error(f"ask_dify_json attempt {attempt + 1} error: {e}")
+            import time
+            time.sleep(2)
+
+    return None
+
 
 def ask_dify_text(uid: int, message: str) -> str:
     """Кадимки текст жооп алат."""
@@ -157,6 +177,7 @@ def ask_dify_text(uid: int, message: str) -> str:
         logger.error(f"ask_dify_text error: {e}")
         return "Туташуу катасы. Кайра баштап көр."
 
+
 # ─────────────────────────────────────────
 # ТЕСТ ЛОГИКАСЫ
 # ─────────────────────────────────────────
@@ -173,37 +194,39 @@ async def load_questions(uid: int, topic: str, is_retry: bool = False) -> bool:
             return False
         # Мурунку туура эмес суроолорду кайра колдон
         retry_qs = [ud["questions"][i] for i in wrong_idxs]
-        ud["questions"]    = retry_qs
-        ud["current_q"]    = 0
+        ud["questions"] = retry_qs
+        ud["current_q"] = 0
         ud["correct_count"] = 0
         ud["wrong_indexes"] = []
-        ud["poll_map"]      = {}
+        ud["poll_map"] = {}
         return True
 
-    # Жаңы суроолор жүктө
-    ud["questions"]    = []
-    ud["current_q"]    = 0
+    # Жаңы суроолор жүктө — жаңы conversation баштайбыз
+    ud["questions"] = []
+    ud["current_q"] = 0
     ud["correct_count"] = 0
     ud["wrong_indexes"] = []
-    ud["poll_map"]      = {}
+    ud["poll_map"] = {}
     ud["current_topic"] = topic
+    ud["test_conv_id"] = ""
 
     prompt = (
         f"{topic} темасынан 1 суроо бер. "
-        f"5 суроону Knowledge Base'тен, калган 10 суроону өзүң жаз. "
-        f"Бул {1}-суроо."
+        f"Суроо жаңы болсун. Бул 1-суроо."
     )
-    q = ask_dify_json(uid, prompt)
+    q = ask_dify_json(uid, prompt, conv_id="")
     if q:
+        ud["test_conv_id"] = q.pop("_conv_id", "")
         ud["questions"].append(q)
         return True
     return False
 
+
 async def send_next_poll(update_or_chat, uid: int, ctx: ContextTypes.DEFAULT_TYPE):
     """Кийинки суроону Poll катары жибер."""
-    ud  = user_data[uid]
+    ud = user_data[uid]
     idx = ud["current_q"]
-    qs  = ud["questions"]
+    qs = ud["questions"]
 
     if idx >= len(qs):
         # Суроо жок — жаңысын жүктө
@@ -220,11 +243,13 @@ async def send_next_poll(update_or_chat, uid: int, ctx: ContextTypes.DEFAULT_TYP
             f"Мурунку суроолорду кайталаба. "
             f"Бул {q_num}-суроо."
         )
-        q = ask_dify_json(uid, prompt)
+        conv_id = ud.get("test_conv_id", "")
+        q = ask_dify_json(uid, prompt, conv_id=conv_id)
         if not q:
             await _send(update_or_chat, ctx, uid,
                         "Суроо жүктөөдө ката болду. /reset деп кайра баштап көр.")
             return
+        ud["test_conv_id"] = q.pop("_conv_id", conv_id)
         qs.append(q)
 
     q = qs[idx]
@@ -235,7 +260,7 @@ async def send_next_poll(update_or_chat, uid: int, ctx: ContextTypes.DEFAULT_TYP
     chat_id = uid
     msg = await ctx.bot.send_poll(
         chat_id=chat_id,
-        question=f"[{idx+1}/{total}] {topic}\n\n{q['question']}",
+        question=f"[{idx + 1}/{total}] {topic}\n\n{q['question']}",
         options=q["options"],
         type="quiz",
         correct_option_id=q["correct"],
@@ -245,24 +270,25 @@ async def send_next_poll(update_or_chat, uid: int, ctx: ContextTypes.DEFAULT_TYP
     )
     ud["poll_map"][msg.poll.id] = idx
 
+
 async def finish_test(update_or_chat, uid: int, ctx: ContextTypes.DEFAULT_TYPE):
     """Тест аяктагандан кийин жыйынтык чыгар."""
-    ud      = user_data[uid]
+    ud = user_data[uid]
     correct = ud["correct_count"]
-    total   = len(ud["questions"])
-    topic   = ud["current_topic"]
-    pct     = round(correct / total * 100) if total else 0
+    total = len(ud["questions"])
+    topic = ud["current_topic"]
+    pct = round(correct / total * 100) if total else 0
 
     # Статистикага жаз
     ud["sessions"].append({
-        "topic":   topic,
+        "topic": topic,
         "correct": correct,
-        "total":   total,
-        "date":    datetime.now(TIMEZONE).strftime("%Y-%m-%d"),
+        "total": total,
+        "date": datetime.now(TIMEZONE).strftime("%Y-%m-%d"),
     })
 
     emoji = "🏆" if pct >= 80 else ("👍" if pct >= 50 else "📚")
-    text  = (
+    text = (
         f"{emoji} *Тест аяктады!*\n\n"
         f"Тема: {topic}\n"
         f"Натыйжа: *{correct}/{total}* ({pct}%)\n"
@@ -277,6 +303,7 @@ async def finish_test(update_or_chat, uid: int, ctx: ContextTypes.DEFAULT_TYPE):
 
     await _send(update_or_chat, ctx, uid, text)
 
+
 async def _send(update_or_chat, ctx, uid: int, text: str):
     """Жөнөкөй текст жибер."""
     try:
@@ -287,22 +314,23 @@ async def _send(update_or_chat, ctx, uid: int, text: str):
     except Exception as e:
         logger.error(f"_send error: {e}")
 
+
 # ─────────────────────────────────────────
 # POLL ЖООП HANDLER
 # ─────────────────────────────────────────
 async def handle_poll_answer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Колдонуучу Poll'го жооп берсе иштейт."""
-    answer  = update.poll_answer
-    uid     = answer.user.id
+    answer = update.poll_answer
+    uid = answer.user.id
     poll_id = answer.poll_id
-    ud      = user_data[uid]
+    ud = user_data[uid]
 
     q_idx = ud["poll_map"].get(poll_id)
     if q_idx is None:
         return
 
     selected = answer.option_ids[0] if answer.option_ids else -1
-    correct  = ud["questions"][q_idx]["correct"]
+    correct = ud["questions"][q_idx]["correct"]
 
     if selected == correct:
         ud["correct_count"] += 1
@@ -318,8 +346,10 @@ async def handle_poll_answer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Кийинки суроону жибер
         class FakeUpdate:
             pass
+
         fake = FakeUpdate()
         await send_next_poll(fake, uid, ctx)
+
 
 # ─────────────────────────────────────────
 # FUNCTION ТАПШЫРМАЛАРЫ
@@ -343,6 +373,7 @@ async def cmd_function(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Функцияларды жазып жибер. Ката болгондорун кайра берем."
     )
 
+
 # ─────────────────────────────────────────
 # СТАТИСТИКА
 # ─────────────────────────────────────────
@@ -352,8 +383,8 @@ def build_stat_text(uid: int, weekly: bool = False) -> str:
         return "Азырынча тест болгон жок."
 
     if weekly:
-        today    = datetime.now(TIMEZONE)
-        cutoff   = today.replace(day=max(1, today.day - 7))
+        today = datetime.now(TIMEZONE)
+        cutoff = today.replace(day=max(1, today.day - 7))
         sessions = [
             s for s in sessions
             if datetime.strptime(s["date"], "%Y-%m-%d") >= cutoff.replace(tzinfo=None)
@@ -364,18 +395,18 @@ def build_stat_text(uid: int, weekly: bool = False) -> str:
     topic_stat: dict = defaultdict(lambda: {"correct": 0, "total": 0})
     for s in sessions:
         topic_stat[s["topic"]]["correct"] += s["correct"]
-        topic_stat[s["topic"]]["total"]   += s["total"]
+        topic_stat[s["topic"]]["total"] += s["total"]
 
     total_c = sum(s["correct"] for s in sessions)
-    total_q = sum(s["total"]   for s in sessions)
-    avg     = round(total_c / total_q * 100) if total_q else 0
+    total_q = sum(s["total"] for s in sessions)
+    avg = round(total_c / total_q * 100) if total_q else 0
 
     title = "📊 *Жумалык статистика*" if weekly else "📊 *Сессия статистикасы*"
     lines = [title, f"Орточо балл: *{avg}%* ({total_c}/{total_q})\n"]
 
     good, mid, bad = [], [], []
     for topic, stat in sorted(topic_stat.items()):
-        pct  = round(stat["correct"] / stat["total"] * 100) if stat["total"] else 0
+        pct = round(stat["correct"] / stat["total"] * 100) if stat["total"] else 0
         line = f"  {topic}: {stat['correct']}/{stat['total']} ({pct}%)"
         if pct >= 80:
             good.append(line)
@@ -394,6 +425,7 @@ def build_stat_text(uid: int, weekly: bool = False) -> str:
         lines.append(f"\n💡 Сунуш: /{worst} деп жаз — ошол темадан тест өт.")
 
     return "\n".join(lines)
+
 
 # ─────────────────────────────────────────
 # ЭСКЕРТМЕЛЕР
@@ -415,6 +447,7 @@ async def send_reminder(app: Application):
         except Exception as e:
             logger.warning(f"Reminder failed {uid}: {e}")
 
+
 async def send_weekly_stats(app: Application):
     for uid in registered_users:
         try:
@@ -423,11 +456,12 @@ async def send_weekly_stats(app: Application):
         except Exception as e:
             logger.warning(f"Weekly stat failed {uid}: {e}")
 
+
 # ─────────────────────────────────────────
 # КОМАНДАЛАР
 # ─────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid  = update.effective_user.id
+    uid = update.effective_user.id
     name = update.effective_user.first_name or "Студент"
     registered_users.add(uid)
     await update.message.reply_text(
@@ -439,6 +473,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "⏰ Эскертме: *шейшемби, бейшемби, жекшемби* 09:00 да тест эскертмеси келет.",
         parse_mode="Markdown"
     )
+
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     registered_users.add(update.effective_user.id)
@@ -456,10 +491,11 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
+
 async def cmd_topic(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid   = update.effective_user.id
+    uid = update.effective_user.id
     registered_users.add(uid)
-    cmd   = update.message.text.split()[0].lstrip("/").lower()
+    cmd = update.message.text.split()[0].lstrip("/").lower()
     topic = TOPICS.get(cmd)
 
     if not topic:
@@ -475,42 +511,48 @@ async def cmd_topic(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await send_next_poll(update, uid, ctx)
 
+
 async def cmd_retry(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     registered_users.add(uid)
-    ok  = await load_questions(uid, user_data[uid]["current_topic"], is_retry=True)
+    ok = await load_questions(uid, user_data[uid]["current_topic"], is_retry=True)
     if not ok:
         await update.message.reply_text("Туура эмес суроо жок. Жаңы тест баштагын!")
         return
     await update.message.reply_text("🔁 Туура эмес суроолор кайра берилет...")
     await send_next_poll(update, uid, ctx)
 
+
 async def cmd_stat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     registered_users.add(uid)
     await update.message.reply_text(build_stat_text(uid), parse_mode="Markdown")
+
 
 async def cmd_weekly(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     registered_users.add(uid)
     await update.message.reply_text(build_stat_text(uid, weekly=True), parse_mode="Markdown")
 
+
 async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user_data[uid]["conversation_id"] = ""
-    user_data[uid]["questions"]       = []
-    user_data[uid]["current_q"]       = 0
-    user_data[uid]["poll_map"]        = {}
+    user_data[uid]["questions"] = []
+    user_data[uid]["current_q"] = 0
+    user_data[uid]["poll_map"] = {}
     await update.message.reply_text("✅ Жаңы чат башталды. Тема тандагын!")
 
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid  = update.effective_user.id
+    uid = update.effective_user.id
     registered_users.add(uid)
     text = update.message.text.strip()
     if not text:
         return
     answer = ask_dify_text(uid, text)
     await update.message.reply_text(answer)
+
 
 # ─────────────────────────────────────────
 # MAIN
@@ -520,15 +562,15 @@ def main():
 
     # Командалар тизмеси
     bot_commands = (
-        [BotCommand(cmd, f"{name} тести") for cmd, name in TOPICS.items()]
-        + [
-            BotCommand("function", "5 функция тапшырмасы"),
-            BotCommand("retry",    "Туура эмес суроолорду кайра"),
-            BotCommand("stat",     "Сессия статистикасы"),
-            BotCommand("weekly",   "Жумалык статистика"),
-            BotCommand("reset",    "Жаңы чат"),
-            BotCommand("help",     "Бардык командалар"),
-        ]
+            [BotCommand(cmd, f"{name} тести") for cmd, name in TOPICS.items()]
+            + [
+                BotCommand("function", "5 функция тапшырмасы"),
+                BotCommand("retry", "Туура эмес суроолорду кайра"),
+                BotCommand("stat", "Сессия статистикасы"),
+                BotCommand("weekly", "Жумалык статистика"),
+                BotCommand("reset", "Жаңы чат"),
+                BotCommand("help", "Бардык командалар"),
+            ]
     )
 
     async def post_init(app: Application):
@@ -537,13 +579,13 @@ def main():
     app.post_init = post_init
 
     # Handler'лар
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("help",     cmd_help))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("function", cmd_function))
-    app.add_handler(CommandHandler("retry",    cmd_retry))
-    app.add_handler(CommandHandler("stat",     cmd_stat))
-    app.add_handler(CommandHandler("weekly",   cmd_weekly))
-    app.add_handler(CommandHandler("reset",    cmd_reset))
+    app.add_handler(CommandHandler("retry", cmd_retry))
+    app.add_handler(CommandHandler("stat", cmd_stat))
+    app.add_handler(CommandHandler("weekly", cmd_weekly))
+    app.add_handler(CommandHandler("reset", cmd_reset))
 
     for cmd in TOPICS:
         app.add_handler(CommandHandler(cmd, cmd_topic))
@@ -567,6 +609,7 @@ def main():
 
     logger.info("✅ Бот иштеп баштады!")
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
